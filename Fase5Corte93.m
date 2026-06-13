@@ -1,0 +1,885 @@
+clc;
+clear;
+close all;
+
+%% ============================================================
+% FASE 5
+% Clasificación diagnóstica final preliminar
+%
+% Archivo: t2-t25.00.nii
+% Caso: t2_t25_00
+% Corte: 93
+%
+% Entrada esperada desde Fase 4:
+%
+% Resultados_t2_t25_00_Corte93/
+% └── FaseIV_Cuantificacion_Manual_Dos_Ventriculos/
+%     ├── FaseIV_resumen_dos_ventriculos_t2_t25_00_corte93.csv
+%     └── FaseIV_metricas_por_ventriculo_t2_t25_00_corte93.csv
+%
+% Salidas:
+%   - CSV final
+%   - TXT final
+%   - 3 imágenes estéticas:
+%       1. Diagnóstico
+%       2. Métricas ventriculares
+%       3. Morfología y severidad
+%
+% Criterio clínico usado:
+%   < 10 mm      Normal
+%   10–12 mm     Ventriculomegalia leve
+%   >12–15 mm    Ventriculomegalia moderada
+%   >15 mm       Ventriculomegalia severa
+%% ============================================================
+
+targetCase  = 't2_t25_00';
+targetSlice = 93;
+
+%% Seleccionar carpeta principal
+
+rootFolder = uigetdir(pwd, ...
+    'Selecciona la carpeta MRI_t2w_nii');
+
+if isequal(rootFolder, 0)
+    error('No seleccionaste carpeta.');
+end
+
+%% Carpetas
+
+phase4Folder = fullfile(rootFolder, ...
+    'Resultados_t2_t25_00_Corte93', ...
+    'FaseIV_Cuantificacion_Manual_Dos_Ventriculos');
+
+phase5Folder = fullfile(rootFolder, ...
+    'Resultados_t2_t25_00_Corte93', ...
+    'FaseV_Clasificacion_Dos_Ventriculos');
+
+if ~exist(phase5Folder, 'dir')
+    mkdir(phase5Folder);
+end
+
+%% Archivos de entrada
+
+csvResumenFase4 = fullfile(phase4Folder, ...
+    'FaseIV_resumen_dos_ventriculos_t2_t25_00_corte93.csv');
+
+csvVentriculosFase4 = fullfile(phase4Folder, ...
+    'FaseIV_metricas_por_ventriculo_t2_t25_00_corte93.csv');
+
+if ~exist(csvResumenFase4, 'file')
+    error('No se encontró el resumen de Fase 4:\n%s', csvResumenFase4);
+end
+
+if ~exist(csvVentriculosFase4, 'file')
+    error('No se encontró la tabla por ventrículo de Fase 4:\n%s', csvVentriculosFase4);
+end
+
+%% Leer tablas
+
+T4 = readtable(csvResumenFase4, ...
+    'TextType', 'string', ...
+    'VariableNamingRule', 'preserve');
+
+TV = readtable(csvVentriculosFase4, ...
+    'TextType', 'string', ...
+    'VariableNamingRule', 'preserve');
+
+if isempty(T4)
+    error('El CSV resumen de Fase 4 está vacío.');
+end
+
+if isempty(TV)
+    error('El CSV por ventrículo de Fase 4 está vacío.');
+end
+
+%% ============================================================
+% Extraer datos principales
+%% ============================================================
+
+filenameValue = getOptionalString(T4, ...
+    ["filename", "fileName", "file", "archivo", "niiPath"]);
+
+if strlength(filenameValue) == 0
+    filenameValue = "t2-t25.00.nii";
+end
+
+dx = getOptionalNumeric(T4, ["dx_mm", "dx"]);
+dy = getOptionalNumeric(T4, ["dy_mm", "dy"]);
+dz = getOptionalNumeric(T4, ["dz_mm", "dz"]);
+
+diametroV1_mm = getOptionalNumeric(T4, ...
+    ["diametroVentriculo1_mm", "diametroV1_mm", ...
+     "diametroAtrialV1_mm", "diametro1_mm"]);
+
+diametroV2_mm = getOptionalNumeric(T4, ...
+    ["diametroVentriculo2_mm", "diametroV2_mm", ...
+     "diametroAtrialV2_mm", "diametro2_mm"]);
+
+% Si no encuentra los diámetros en el resumen, los obtiene de la tabla por ventrículo.
+if isnan(diametroV1_mm) || isnan(diametroV2_mm)
+
+    diamCol = findColumn(TV, ...
+        ["diametroAtrial_mm", ...
+         "diametro_mm", ...
+         "diametroAtrialEstimado_mm"]);
+
+    if strlength(diamCol) == 0
+        error('No se encontró columna de diámetro atrial en la tabla por ventrículo.');
+    end
+
+    diametros = toNumericVector(TV.(diamCol));
+
+    if length(diametros) < 2
+        error('La tabla por ventrículo no tiene dos diámetros.');
+    end
+
+    diametroV1_mm = diametros(1);
+    diametroV2_mm = diametros(2);
+
+end
+
+diametroMax_mm = max([diametroV1_mm, diametroV2_mm]);
+diametroPromedio_mm = mean([diametroV1_mm, diametroV2_mm], 'omitnan');
+diferenciaDiametros_mm = abs(diametroV1_mm - diametroV2_mm);
+
+if diametroV1_mm > diametroV2_mm
+    ventriculoCritico = "Ventriculo_1";
+elseif diametroV2_mm > diametroV1_mm
+    ventriculoCritico = "Ventriculo_2";
+else
+    ventriculoCritico = "Ambos similares";
+end
+
+areaTotal_px = getOptionalNumeric(T4, ["areaTotal_px", "area_px_total"]);
+
+areaTotal_mm2 = getOptionalNumeric(T4, ...
+    ["areaTotal_mm2", ...
+     "areaTotalVentricular_mm2", ...
+     "area_mm2_total"]);
+
+volumenEstimado_mm3 = getOptionalNumeric(T4, ...
+    ["volumenTotalEstimadoCorte_mm3", ...
+     "volumenEstimadoCorte_mm3", ...
+     "volumenEstimado_mm3"]);
+
+eccMean = getOptionalNumeric(T4, ...
+    ["eccentricityMean", ...
+     "excentricidadMedia", ...
+     "eccentricity_mean"]);
+
+relacionMean = getOptionalNumeric(T4, ...
+    ["relacionEjeMayorMenorMean", ...
+     "relacionMayorMenorMean", ...
+     "axisRatioMean"]);
+
+compactnessMean = getOptionalNumeric(T4, ...
+    ["compactnessMean", ...
+     "compacidadMedia", ...
+     "compactness_mean"]);
+
+%% Completar faltantes desde la tabla por ventrículo
+
+if isnan(areaTotal_mm2)
+
+    areaCol = findColumn(TV, ...
+        ["area_mm2", "areaVentricular_mm2", "area"]);
+
+    if strlength(areaCol) > 0
+        areaTotal_mm2 = sum(toNumericVector(TV.(areaCol)), 'omitnan');
+    end
+
+end
+
+if isnan(volumenEstimado_mm3) && ~isnan(areaTotal_mm2) && ~isnan(dz)
+    volumenEstimado_mm3 = areaTotal_mm2 * dz;
+end
+
+if isnan(eccMean)
+
+    eccCol = findColumn(TV, ["eccentricity", "excentricidad"]);
+
+    if strlength(eccCol) > 0
+        eccMean = mean(toNumericVector(TV.(eccCol)), 'omitnan');
+    end
+
+end
+
+if isnan(relacionMean)
+
+    relCol = findColumn(TV, ...
+        ["relacionEjeMayorMenor", ...
+         "relacionMayorMenor", ...
+         "axisRatio"]);
+
+    if strlength(relCol) > 0
+        relacionMean = mean(toNumericVector(TV.(relCol)), 'omitnan');
+    end
+
+end
+
+if isnan(compactnessMean)
+
+    compCol = findColumn(TV, ["compactness", "compacidad"]);
+
+    if strlength(compCol) > 0
+        compactnessMean = mean(toNumericVector(TV.(compCol)), 'omitnan');
+    end
+
+end
+
+%% ============================================================
+% Clasificación clínica
+%% ============================================================
+
+clasV1 = clasificarVentriculomegalia(diametroV1_mm);
+clasV2 = clasificarVentriculomegalia(diametroV2_mm);
+diagnosticoFinal = clasificarVentriculomegalia(diametroMax_mm);
+
+if diametroMax_mm < 10
+    riesgoFinal = "Sin sospecha preliminar";
+else
+    riesgoFinal = "Sospecha por criterio >= 10 mm";
+end
+
+%% Interpretación de asimetría
+
+if diferenciaDiametros_mm < 1
+    interpretacionAsimetria = "Diámetros similares, sin asimetría marcada.";
+elseif diferenciaDiametros_mm < 3
+    interpretacionAsimetria = "Asimetría leve entre ventrículos.";
+else
+    interpretacionAsimetria = "Asimetría marcada entre ventrículos.";
+end
+
+%% Interpretación morfológica
+
+if isnan(eccMean)
+    interpretacionEcc = "Excentricidad no calculable.";
+elseif eccMean < 0.50
+    interpretacionEcc = "Cavidades relativamente redondeadas.";
+elseif eccMean < 0.80
+    interpretacionEcc = "Cavidades elípticas o moderadamente alargadas.";
+else
+    interpretacionEcc = "Cavidades alargadas.";
+end
+
+if isnan(relacionMean)
+    interpretacionRelacion = "Relación eje mayor/eje menor no calculable.";
+elseif relacionMean < 1.5
+    interpretacionRelacion = "Relación baja; cavidades poco alargadas.";
+elseif relacionMean < 2.5
+    interpretacionRelacion = "Relación moderada; cavidades elípticas.";
+else
+    interpretacionRelacion = "Relación alta; cavidades muy alargadas.";
+end
+
+if isnan(compactnessMean)
+    interpretacionCompacidad = "Compacidad no calculable.";
+elseif compactnessMean > 0.70
+    interpretacionCompacidad = "Compacidad alta; forma compacta.";
+elseif compactnessMean > 0.35
+    interpretacionCompacidad = "Compacidad intermedia; forma elíptica o irregular.";
+else
+    interpretacionCompacidad = "Compacidad baja; posible fragmentación.";
+end
+
+%% Análisis de severidad
+
+if diametroMax_mm < 10
+    analisisSeveridad = "No cumple criterio preliminar de ventriculomegalia.";
+elseif diametroMax_mm <= 12
+    analisisSeveridad = "Compatible con ventriculomegalia leve preliminar.";
+elseif diametroMax_mm <= 15
+    analisisSeveridad = "Compatible con ventriculomegalia moderada preliminar.";
+else
+    analisisSeveridad = "Compatible con ventriculomegalia severa preliminar.";
+end
+
+analisisMorfologicoSeveridad = ...
+    "A mayor severidad se espera aumento del diámetro atrial, área ventricular y volumen. También puede aumentar la elongación o irregularidad de las cavidades, lo que se refleja en mayor relación eje mayor/eje menor, cambios en excentricidad y menor compacidad.";
+
+%% ============================================================
+% Tabla final
+%% ============================================================
+
+Tfinal = table();
+
+Tfinal.caseName = string(targetCase);
+Tfinal.filename = string(filenameValue);
+Tfinal.slice = targetSlice;
+
+Tfinal.dx_mm = dx;
+Tfinal.dy_mm = dy;
+Tfinal.dz_mm = dz;
+
+Tfinal.diametroVentriculo1_mm = diametroV1_mm;
+Tfinal.diametroVentriculo2_mm = diametroV2_mm;
+Tfinal.diametroAtrialMax_mm = diametroMax_mm;
+Tfinal.diametroAtrialPromedio_mm = diametroPromedio_mm;
+Tfinal.diferenciaDiametros_mm = diferenciaDiametros_mm;
+
+Tfinal.clasificacionVentriculo1 = clasV1;
+Tfinal.clasificacionVentriculo2 = clasV2;
+
+Tfinal.ventriculoCritico = ventriculoCritico;
+Tfinal.diagnosticoFinalPreliminar = diagnosticoFinal;
+Tfinal.riesgoFinal = riesgoFinal;
+
+Tfinal.areaTotal_px = areaTotal_px;
+Tfinal.areaTotal_mm2 = areaTotal_mm2;
+Tfinal.volumenEstimadoCorte_mm3 = volumenEstimado_mm3;
+
+Tfinal.eccentricityMean = eccMean;
+Tfinal.relacionEjeMayorMenorMean = relacionMean;
+Tfinal.compactnessMean = compactnessMean;
+
+Tfinal.interpretacionAsimetria = interpretacionAsimetria;
+Tfinal.interpretacionEccentricity = interpretacionEcc;
+Tfinal.interpretacionRelacionEjes = interpretacionRelacion;
+Tfinal.interpretacionCompacidad = interpretacionCompacidad;
+Tfinal.analisisSeveridad = analisisSeveridad;
+Tfinal.analisisMorfologicoSeveridad = analisisMorfologicoSeveridad;
+
+csvFinal = fullfile(phase5Folder, ...
+    'FaseV_resultado_final_dos_ventriculos_t2_t25_00_corte93.csv');
+
+writetable(Tfinal, csvFinal);
+
+%% ============================================================
+% FIGURA 1: Diagnóstico limpio
+%% ============================================================
+
+visualDiagnosticoPath = fullfile(phase5Folder, ...
+    'FaseV_01_resumen_diagnostico_estetico_t2_t25_00_corte93.png');
+
+fig1 = figure('Visible', 'on', ...
+    'Position', [100 100 1500 850], ...
+    'Color', 'w');
+
+axis off;
+
+annotation('textbox', [0.05 0.90 0.90 0.07], ...
+    'String', 'FASE V | Clasificación diagnóstica preliminar', ...
+    'FontSize', 24, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+annotation('textbox', [0.05 0.84 0.90 0.04], ...
+    'String', ['Caso ', targetCase, ' | Corte axial ', num2str(targetSlice)], ...
+    'FontSize', 16, ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+diagnosticoTexto = sprintf([ ...
+    'DIAGNÓSTICO FINAL PRELIMINAR\n\n', ...
+    '%s\n\n', ...
+    'Criterio: mayor diámetro atrial medido'], ...
+    char(diagnosticoFinal));
+
+annotation('textbox', [0.08 0.58 0.38 0.20], ...
+    'String', diagnosticoTexto, ...
+    'FontSize', 18, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [0.93 0.93 0.93], ...
+    'EdgeColor', [0.15 0.15 0.15], ...
+    'LineWidth', 1.8, ...
+    'Interpreter', 'none');
+
+riesgoTexto = sprintf([ ...
+    'RIESGO\n\n', ...
+    '%s'], ...
+    char(riesgoFinal));
+
+annotation('textbox', [0.54 0.58 0.38 0.20], ...
+    'String', riesgoTexto, ...
+    'FontSize', 18, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [1.00 0.95 0.82], ...
+    'EdgeColor', [0.35 0.25 0.10], ...
+    'LineWidth', 1.8, ...
+    'Interpreter', 'none');
+
+diametrosTexto = sprintf([ ...
+    'DIÁMETROS ATRIALES\n\n', ...
+    'Ventrículo 1: %.2f mm\n', ...
+    'Ventrículo 2: %.2f mm\n\n', ...
+    'Diámetro máximo: %.2f mm\n', ...
+    'Ventrículo crítico: %s'], ...
+    diametroV1_mm, diametroV2_mm, diametroMax_mm, char(ventriculoCritico));
+
+annotation('textbox', [0.08 0.30 0.38 0.22], ...
+    'String', diametrosTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'left', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [0.97 0.97 0.97], ...
+    'EdgeColor', [0.25 0.25 0.25], ...
+    'LineWidth', 1.4, ...
+    'Interpreter', 'none');
+
+criterioTexto = sprintf([ ...
+    'CRITERIO CLÍNICO USADO\n\n', ...
+    '< 10 mm       Normal\n', ...
+    '10–12 mm      Ventriculomegalia leve\n', ...
+    '>12–15 mm     Ventriculomegalia moderada\n', ...
+    '>15 mm        Ventriculomegalia severa\n\n', ...
+    '%s'], ...
+    char(analisisSeveridad));
+
+annotation('textbox', [0.54 0.30 0.38 0.22], ...
+    'String', criterioTexto, ...
+    'FontSize', 14, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'left', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [0.97 0.97 0.97], ...
+    'EdgeColor', [0.25 0.25 0.25], ...
+    'LineWidth', 1.4, ...
+    'Interpreter', 'none');
+
+annotation('textbox', [0.08 0.13 0.84 0.10], ...
+    'String', ['Nota metodológica: resultado computacional/manual y preliminar. ', ...
+               'No sustituye diagnóstico médico ni lectura radiológica.'], ...
+    'FontSize', 14, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [1.00 0.97 0.86], ...
+    'EdgeColor', [0.45 0.35 0.10], ...
+    'LineWidth', 1.3, ...
+    'Interpreter', 'none');
+
+saveas(fig1, visualDiagnosticoPath);
+
+%% ============================================================
+% FIGURA 2: Métricas ventriculares
+%% ============================================================
+
+visualMetricasPath = fullfile(phase5Folder, ...
+    'FaseV_02_metricas_ventriculares_estetico_t2_t25_00_corte93.png');
+
+fig2 = figure('Visible', 'on', ...
+    'Position', [100 100 1500 850], ...
+    'Color', 'w');
+
+axis off;
+
+annotation('textbox', [0.05 0.90 0.90 0.07], ...
+    'String', 'FASE V | Métricas ventriculares finales', ...
+    'FontSize', 24, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+annotation('textbox', [0.05 0.84 0.90 0.04], ...
+    'String', ['Caso ', targetCase, ' | Corte ', num2str(targetSlice)], ...
+    'FontSize', 16, ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+diametroTabla = sprintf([ ...
+    'DIÁMETROS\n\n', ...
+    'Ventrículo 1                 %.2f mm\n', ...
+    'Ventrículo 2                 %.2f mm\n', ...
+    'Diferencia entre ambos        %.2f mm\n', ...
+    'Promedio                     %.2f mm\n', ...
+    'Máximo usado                 %.2f mm'], ...
+    diametroV1_mm, diametroV2_mm, diferenciaDiametros_mm, ...
+    diametroPromedio_mm, diametroMax_mm);
+
+annotation('textbox', [0.08 0.55 0.38 0.25], ...
+    'String', diametroTabla, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.95 0.95 0.95], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+areaTexto = sprintf([ ...
+    'ÁREA Y VOLUMEN\n\n', ...
+    'Área total ventricular        %s mm²\n', ...
+    'Volumen parcial estimado      %s mm³\n\n', ...
+    'Nota: el volumen es parcial porque solo se evaluó un corte axial.'], ...
+    formatNumberOrNA(areaTotal_mm2), formatNumberOrNA(volumenEstimado_mm3));
+
+annotation('textbox', [0.54 0.55 0.38 0.25], ...
+    'String', areaTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.95 0.95 0.95], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+asimetriaTexto = sprintf([ ...
+    'COMPARACIÓN ENTRE VENTRÍCULOS\n\n', ...
+    '%s\n\n', ...
+    'Diferencia entre diámetros: %.2f mm.'], ...
+    char(interpretacionAsimetria), diferenciaDiametros_mm);
+
+annotation('textbox', [0.08 0.27 0.38 0.20], ...
+    'String', asimetriaTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.98 0.98 0.98], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+conversionTexto = sprintf([ ...
+    'CONVERSIÓN ESPACIAL\n\n', ...
+    'dx = %s mm/px\n', ...
+    'dy = %s mm/px\n', ...
+    'dz = %s mm\n\n', ...
+    'Las medidas en píxeles se multiplicaron por la resolución espacial del NIfTI.'], ...
+    formatNumberOrNA(dx), ...
+    formatNumberOrNA(dy), ...
+    formatNumberOrNA(dz));
+
+annotation('textbox', [0.54 0.27 0.38 0.20], ...
+    'String', conversionTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.98 0.98 0.98], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+saveas(fig2, visualMetricasPath);
+
+%% ============================================================
+% FIGURA 3: Morfología y severidad
+%% ============================================================
+
+visualMorfologiaPath = fullfile(phase5Folder, ...
+    'FaseV_03_morfologia_estetico_t2_t25_00_corte93.png');
+
+fig3 = figure('Visible', 'on', ...
+    'Position', [100 100 1500 850], ...
+    'Color', 'w');
+
+axis off;
+
+annotation('textbox', [0.05 0.90 0.90 0.07], ...
+    'String', 'FASE V | Descriptores morfológicos y severidad', ...
+    'FontSize', 24, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+annotation('textbox', [0.05 0.84 0.90 0.04], ...
+    'String', ['Caso ', targetCase, ' | Corte ', num2str(targetSlice)], ...
+    'FontSize', 16, ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor', 'none', ...
+    'Interpreter', 'none');
+
+morfTexto = sprintf([ ...
+    'DESCRIPTORES MORFOLÓGICOS\n\n', ...
+    'Excentricidad media                    %s\n', ...
+    'Relación eje mayor/eje menor media     %s\n', ...
+    'Compacidad media                       %s'], ...
+    formatNumberOrNA(eccMean), ...
+    formatNumberOrNA(relacionMean), ...
+    formatNumberOrNA(compactnessMean));
+
+annotation('textbox', [0.08 0.57 0.38 0.22], ...
+    'String', morfTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.95 0.95 0.95], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+interpTexto = sprintf([ ...
+    'INTERPRETACIÓN MORFOLÓGICA\n\n', ...
+    '%s\n\n', ...
+    '%s\n\n', ...
+    '%s'], ...
+    char(interpretacionEcc), ...
+    char(interpretacionRelacion), ...
+    char(interpretacionCompacidad));
+
+annotation('textbox', [0.54 0.57 0.38 0.22], ...
+    'String', interpTexto, ...
+    'FontSize', 14, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.95 0.95 0.95], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+sevTexto = sprintf([ ...
+    'RELACIÓN CON SEVERIDAD\n\n', ...
+    '%s'], ...
+    char(analisisMorfologicoSeveridad));
+
+annotation('textbox', [0.08 0.25 0.84 0.22], ...
+    'String', sevTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'BackgroundColor', [0.98 0.98 0.98], ...
+    'EdgeColor', [0.20 0.20 0.20], ...
+    'LineWidth', 1.5, ...
+    'Interpreter', 'none');
+
+resumenTexto = sprintf([ ...
+    'RESUMEN: el diámetro máximo fue %.2f mm, por lo que la clasificación preliminar fue: %s. ', ...
+    'El resultado debe validarse anatómicamente.'], ...
+    diametroMax_mm, char(diagnosticoFinal));
+
+annotation('textbox', [0.08 0.10 0.84 0.08], ...
+    'String', resumenTexto, ...
+    'FontSize', 15, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', ...
+    'BackgroundColor', [1.00 0.97 0.86], ...
+    'EdgeColor', [0.45 0.35 0.10], ...
+    'LineWidth', 1.3, ...
+    'Interpreter', 'none');
+
+saveas(fig3, visualMorfologiaPath);
+
+%% ============================================================
+% Reporte TXT
+%% ============================================================
+
+txtPath = fullfile(phase5Folder, ...
+    'FaseV_reporte_diagnostico_dos_ventriculos_t2_t25_00_corte93.txt');
+
+fid = fopen(txtPath, 'w');
+
+fprintf(fid, 'FASE V - CLASIFICACION FINAL PRELIMINAR\n');
+fprintf(fid, 'Caso: %s\n', targetCase);
+fprintf(fid, 'Archivo: %s\n', char(filenameValue));
+fprintf(fid, 'Corte: %d\n\n', targetSlice);
+
+fprintf(fid, 'CRITERIO CLINICO USADO\n');
+fprintf(fid, '< 10 mm: Normal\n');
+fprintf(fid, '10-12 mm: Ventriculomegalia leve\n');
+fprintf(fid, '>12-15 mm: Ventriculomegalia moderada\n');
+fprintf(fid, '>15 mm: Ventriculomegalia severa\n\n');
+
+fprintf(fid, 'DIAMETROS ATRIALES\n');
+fprintf(fid, 'Diametro V1 = %.4f mm\n', diametroV1_mm);
+fprintf(fid, 'Diametro V2 = %.4f mm\n', diametroV2_mm);
+fprintf(fid, 'Diametro maximo = %.4f mm\n', diametroMax_mm);
+fprintf(fid, 'Diametro promedio = %.4f mm\n', diametroPromedio_mm);
+fprintf(fid, 'Diferencia entre ventriculos = %.4f mm\n', diferenciaDiametros_mm);
+fprintf(fid, 'Ventriculo critico = %s\n\n', char(ventriculoCritico));
+
+fprintf(fid, 'CLASIFICACION\n');
+fprintf(fid, 'Clasificacion V1 = %s\n', char(clasV1));
+fprintf(fid, 'Clasificacion V2 = %s\n', char(clasV2));
+fprintf(fid, 'Diagnostico final preliminar = %s\n', char(diagnosticoFinal));
+fprintf(fid, 'Riesgo final = %s\n\n', char(riesgoFinal));
+
+fprintf(fid, 'AREA Y VOLUMEN\n');
+fprintf(fid, 'Area total ventricular = %.4f mm2\n', areaTotal_mm2);
+fprintf(fid, 'Volumen parcial estimado = %.4f mm3\n', volumenEstimado_mm3);
+fprintf(fid, 'Nota: el volumen es parcial porque solo se evaluo un corte axial.\n\n');
+
+fprintf(fid, 'DESCRIPTORES MORFOLOGICOS\n');
+fprintf(fid, 'Excentricidad media = %.4f\n', eccMean);
+fprintf(fid, 'Relacion eje mayor/eje menor media = %.4f\n', relacionMean);
+fprintf(fid, 'Compacidad media = %.4f\n\n', compactnessMean);
+
+fprintf(fid, 'INTERPRETACION\n');
+fprintf(fid, '%s\n', char(interpretacionAsimetria));
+fprintf(fid, '%s\n', char(interpretacionEcc));
+fprintf(fid, '%s\n', char(interpretacionRelacion));
+fprintf(fid, '%s\n\n', char(interpretacionCompacidad));
+
+fprintf(fid, 'ANALISIS DE SEVERIDAD\n');
+fprintf(fid, '%s\n\n', char(analisisSeveridad));
+fprintf(fid, '%s\n\n', char(analisisMorfologicoSeveridad));
+
+fprintf(fid, 'ADVERTENCIA\n');
+fprintf(fid, 'Resultado computacional/manual preliminar. No sustituye diagnostico medico ni lectura radiologica.\n');
+
+fclose(fid);
+
+%% Consola
+
+fprintf('\n====================================================\n');
+fprintf('FASE 5 TERMINADA\n');
+fprintf('Caso: %s\n', targetCase);
+fprintf('Corte: %d\n', targetSlice);
+fprintf('Diámetro V1: %.2f mm\n', diametroV1_mm);
+fprintf('Diámetro V2: %.2f mm\n', diametroV2_mm);
+fprintf('Diámetro máximo: %.2f mm\n', diametroMax_mm);
+fprintf('Diagnóstico final preliminar: %s\n', char(diagnosticoFinal));
+fprintf('Riesgo: %s\n', char(riesgoFinal));
+fprintf('\nCSV final:\n%s\n', csvFinal);
+fprintf('\nVisuales generados:\n');
+fprintf('1) Diagnóstico:\n%s\n', visualDiagnosticoPath);
+fprintf('2) Métricas ventriculares:\n%s\n', visualMetricasPath);
+fprintf('3) Morfología y severidad:\n%s\n', visualMorfologiaPath);
+fprintf('\nReporte TXT:\n%s\n', txtPath);
+fprintf('====================================================\n');
+
+disp('Resultado final:');
+disp(Tfinal);
+
+%% ============================================================
+% FUNCIONES LOCALES
+%% ============================================================
+
+function colName = findColumn(T, possibleNames)
+
+    vars = string(T.Properties.VariableNames);
+    varsNorm = normalizeColumnNames(vars);
+    possibleNorm = normalizeColumnNames(possibleNames);
+
+    colName = "";
+
+    for i = 1:length(possibleNorm)
+
+        idx = find(varsNorm == possibleNorm(i), 1);
+
+        if ~isempty(idx)
+            colName = vars(idx);
+            return;
+        end
+
+    end
+
+end
+
+function value = getOptionalNumeric(T, possibleNames)
+
+    colName = findColumn(T, possibleNames);
+
+    if strlength(colName) == 0
+        value = NaN;
+        return;
+    end
+
+    data = T.(colName);
+    nums = toNumericVector(data);
+
+    if isempty(nums)
+        value = NaN;
+    else
+        value = nums(1);
+    end
+
+end
+
+function value = getOptionalString(T, possibleNames)
+
+    colName = findColumn(T, possibleNames);
+
+    if strlength(colName) == 0
+        value = "";
+        return;
+    end
+
+    data = T.(colName);
+
+    if iscell(data)
+        data = string(data);
+    end
+
+    if isstring(data) || ischar(data)
+        value = string(data(1));
+    elseif isnumeric(data)
+        value = string(data(1));
+    else
+        try
+            value = string(data(1));
+        catch
+            value = "";
+        end
+    end
+
+end
+
+function nums = toNumericVector(x)
+
+    if isnumeric(x)
+        nums = double(x);
+        return;
+    end
+
+    if iscell(x)
+        x = string(x);
+    end
+
+    if isstring(x) || ischar(x)
+        x = string(x);
+        nums = str2double(strrep(x, ',', '.'));
+        return;
+    end
+
+    try
+        nums = double(x);
+    catch
+        nums = NaN(size(x));
+    end
+
+end
+
+function namesNorm = normalizeColumnNames(names)
+
+    names = string(names);
+    namesNorm = strings(size(names));
+
+    for i = 1:length(names)
+
+        s = lower(char(names(i)));
+
+        s = strrep(s, 'á', 'a');
+        s = strrep(s, 'é', 'e');
+        s = strrep(s, 'í', 'i');
+        s = strrep(s, 'ó', 'o');
+        s = strrep(s, 'ú', 'u');
+        s = strrep(s, 'ñ', 'n');
+
+        s = regexprep(s, '[^a-z0-9]', '');
+
+        namesNorm(i) = string(s);
+
+    end
+
+end
+
+function diagnostico = clasificarVentriculomegalia(d)
+
+    if isnan(d) || d <= 0
+        diagnostico = "No cuantificable";
+    elseif d < 10
+        diagnostico = "Normal preliminar";
+    elseif d <= 12
+        diagnostico = "Ventriculomegalia leve preliminar";
+    elseif d <= 15
+        diagnostico = "Ventriculomegalia moderada preliminar";
+    else
+        diagnostico = "Ventriculomegalia severa preliminar";
+    end
+
+end
+
+function out = formatNumberOrNA(x)
+
+    if isnan(x)
+        out = 'No calculable';
+    else
+        out = num2str(x, '%.3f');
+    end
+
+end
